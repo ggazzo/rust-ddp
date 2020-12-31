@@ -1,3 +1,5 @@
+use log::{info, debug};
+
 mod ddp;
 mod client;
 
@@ -9,8 +11,6 @@ use std::{
 };
 
 use tokio;
-use tokio::time::{timeout, Duration};
-use tokio::sync::Notify;
 
 use futures::prelude::*;
 use futures::{
@@ -25,7 +25,7 @@ use async_tungstenite::tungstenite::Message;
 type Tx<T> = Arc<Mutex<UnboundedSender<T>>>;
 
 async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr) {
-    println!("Incoming TCP connection from: {}", addr);
+    info!("Incoming TCP connection from: {}", addr);
 
     let _ = raw_stream.set_nodelay(true);
 
@@ -33,14 +33,11 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr) {
         .await
         .expect("Error during the websocket handshake occurred");
     
-    println!("WebSocket connection established: {}", addr);
+        debug!("WebSocket connection established: {}", addr);
     
     let (write, read) = stream.split();
     
     let (tx, rx) = unbounded::<Message>();
-
-    let notify = Arc::new(Notify::new());
-    let notify2 = notify.clone();
 
     let client = Arc::new(client::Client::new(Arc::new(Mutex::new(tx))));
 
@@ -50,24 +47,14 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr) {
         .try_for_each(move |msg| {
             let msg_raw = msg.to_text().unwrap();
             c.handle(msg_raw);
-            notify.notify_one();
             future::ok(())
         });
-    
-    let duration = Duration::from_millis(10000);
-
-    task::spawn(async move {
-        while let Ok(_) = timeout(duration, notify2.notified()).await {
-            println!("did not receive value within 10 ms");
-        }
-        client.close();
-    });    
 
     let receive_from_others = rx.map(Ok).forward(write);
     pin_mut!(broadcast_incoming, receive_from_others);
     future::select(broadcast_incoming, receive_from_others).await;
 
-    println!("{} disconnected", &addr);
+    debug!("{} disconnected", &addr);
 }
 
 async fn run() -> Result<(), IoError> {
@@ -77,7 +64,7 @@ async fn run() -> Result<(), IoError> {
 
     let try_socket = TcpListener::bind(&addr).await;
     let listener = try_socket.expect("Failed to bind");
-        println!("Listening on: {}", addr);
+    info!("Listening on: {}", addr);
 
     // Let's spawn the handling of each connection in a separate task.
     while let Ok((stream, addr)) = listener.accept().await {
